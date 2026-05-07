@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Storymap - Passeio nas Grandes Árvores</title>
+    <script src='https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js'></script>
+    <link href='https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css' rel='stylesheet' />
+    <script src='https://cdn.jsdelivr.net/npm/exif-js@2.3.0/exif.js'></script>
+    <style>
+        body { margin: 0; padding: 0; font-family: sans-serif; }
+        #map { position: absolute; top: 0; bottom: 0; width: 100%; }
+        .sidebar { position: absolute; top: 10px; left: 10px; background: white; padding: 10px; max-height: 80vh; overflow-y: auto; width: 200px; z-index: 1; border-radius: 4px; box-shadow: 0 0 10px rgba(0,0,0,0.2); }
+        .photo-item { margin-bottom: 10px; cursor: pointer; }
+        .photo-item img { width: 100%; height: auto; border-radius: 2px; }
+        .photo-item:hover { opacity: 0.8; }
+        .controls { position: absolute; bottom: 30px; left: 50%; transform: translateX(-50%); background: white; padding: 10px 20px; border-radius: 4px; box-shadow: 0 0 10px rgba(0,0,0,0.2); z-index: 1; display: flex; gap: 10px; align-items: center; }
+        .controls button { padding: 5px 15px; cursor: pointer; border: 1px solid #ccc; border-radius: 3px; background: #f0f0f0; }
+        .controls button:hover { background: #e0e0e0; }
+        .controls button.active { background: #007cbf; color: white; }
+        input[type="range"] { width: 200px; }
+        #upload-section { max-width: 800px; margin: 20px auto; padding: 20px; }
+        .upload-group { margin-bottom: 20px; }
+        #photo-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 15px; margin: 20px 0; }
+        .photo-upload-item { border: 1px solid #ccc; padding: 10px; border-radius: 4px; }
+        .photo-upload-item img { width: 100%; height: auto; border-radius: 2px; }
+        .photo-upload-item textarea { width: 100%; margin-top: 5px; padding: 5px; box-sizing: border-box; resize: vertical; }
+        #generate-btn { padding: 10px 20px; background: #007cbf; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; }
+        #generate-btn:disabled { background: #ccc; cursor: not-allowed; }
+        #storymap-container { position: relative; width: 100%; height: 100vh; }
+    </style>
+</head>
+<body>
+    <div id="upload-section">
+        <h1>Storymap Creator</h1>
+        <div class="upload-group">
+            <label>GPX Track File:</label><br>
+            <input type="file" id="gpx-input" accept=".gpx" />
+        </div>
+        <div class="upload-group">
+            <label>Photo Files (JPG with GPS):</label><br>
+            <input type="file" id="photo-input" accept=".jpg,.jpeg" multiple />
+        </div>
+        <div id="photo-list"></div>
+        <button id="generate-btn" disabled>Generate Storymap</button>
+    </div>
+    <div id="storymap-container" style="display: none;">
+        <div class="sidebar" id="sidebar"></div>
+        <div id="map"></div>
+        <div class="controls">
+            <button id="playBtn">Play</button>
+            <button id="pauseBtn">Pause</button>
+            <input type="range" id="trackSlider" min="0" max="100" value="0" />
+            <span id="timeDisplay">0:00</span>
+        </div>
+    </div>
+    <script>
+        const MAPTILER_KEY = 'rMZU9gPUpqLw4iOuK2P8';
+
+        let gpxFile = null;
+        let photoFiles = [];
+        let photoData = []; // { file, url, lat, lon, description }
+
+        document.getElementById('gpx-input').addEventListener('change', (e) => {
+            gpxFile = e.target.files[0];
+            checkReady();
+        });
+
+        document.getElementById('photo-input').addEventListener('change', (e) => {
+            photoFiles = Array.from(e.target.files).filter(f => f.type === 'image/jpeg');
+            renderPhotoList();
+        });
+
+        function renderPhotoList() {
+            const list = document.getElementById('photo-list');
+            list.innerHTML = '';
+            photoData = [];
+            let loaded = 0;
+            photoFiles.forEach((file, idx) => {
+                const url = URL.createObjectURL(file);
+                const item = document.createElement('div');
+                item.className = 'photo-upload-item';
+                item.innerHTML = `
+                    <img src="${url}" alt="${file.name}" />
+                    <textarea placeholder="Add description..." data-idx="${idx}" rows="2"></textarea>
+                `;
+                list.appendChild(item);
+
+                const img = new Image();
+                img.src = url;
+                img.onload = () => {
+                    EXIF.getData(img, function() {
+                        const lat = EXIF.getTag(this, 'GPSLatitude');
+                        const latRef = EXIF.getTag(this, 'GPSLatitudeRef');
+                        const lon = EXIF.getTag(this, 'GPSLongitude');
+                        const lonRef = EXIF.getTag(this, 'GPSLongitudeRef');
+                        let finalLat = null, finalLon = null;
+                        if (lat && lon) {
+                            const latDeg = lat[0] + lat[1]/60 + lat[2]/3600;
+                            const lonDeg = lon[0] + lon[1]/60 + lon[2]/3600;
+                            finalLat = latRef === 'S' ? -latDeg : latDeg;
+                            finalLon = lonRef === 'W' ? -lonDeg : lonDeg;
+                        }
+                        photoData[idx] = { file, url, lat: finalLat, lon: finalLon, description: '' };
+                        loaded++;
+                        if (loaded === photoFiles.length) checkReady();
+                    });
+                };
+            });
+            document.getElementById('generate-btn').disabled = true;
+        }
+
+        document.getElementById('photo-list').addEventListener('input', (e) => {
+            if (e.target.tagName === 'TEXTAREA') {
+                const idx = parseInt(e.target.dataset.idx);
+                if (photoData[idx]) photoData[idx].description = e.target.value;
+            }
+        });
+
+        function checkReady() {
+            const allGeo = photoData.length === photoFiles.length && photoData.every(p => p !== undefined);
+            document.getElementById('generate-btn').disabled = !(gpxFile && allGeo);
+        }
+
+        document.getElementById('generate-btn').addEventListener('click', () => {
+            document.getElementById('upload-section').style.display = 'none';
+            document.getElementById('storymap-container').style.display = 'block';
+            initStorymap();
+        });
+
+        let trackPoints = [];
+        let animMarker = null;
+        let animIndex = 0;
+        let animInterval = null;
+        let isPlaying = false;
+
+        function initStorymap() {
+            const map = new maplibregl.Map({
+                container: 'map',
+                style: `https://api.maptiler.com/maps/streets/style.json?key=${MAPTILER_KEY}`,
+                center: [-46.5, -23.5],
+                zoom: 10
+            });
+
+            function updateMarker(index) {
+                if (!trackPoints.length || !animMarker) return;
+                const pt = trackPoints[Math.min(index, trackPoints.length - 1)];
+                animMarker.setLngLat([pt.lon, pt.lat]);
+                document.getElementById('trackSlider').value = (index / (trackPoints.length - 1)) * 100;
+                if (pt.time) document.getElementById('timeDisplay').textContent = pt.time.toLocaleTimeString();
+            }
+
+            map.on('load', async () => {
+                const gpxText = await gpxFile.text();
+                const parser = new DOMParser();
+                const gpxDoc = parser.parseFromString(gpxText, 'text/xml');
+                trackPoints = Array.from(gpxDoc.getElementsByTagName('trkpt')).map(pt => ({
+                    lat: parseFloat(pt.getAttribute('lat')),
+                    lon: parseFloat(pt.getAttribute('lon')),
+                    time: new Date(pt.getElementsByTagName('time')[0]?.textContent)
+                })).filter(pt => !isNaN(pt.lat) && !isNaN(pt.lon) && pt.time instanceof Date && !isNaN(pt.time));
+
+                const gpxGeoJSON = {
+                    type: 'Feature',
+                    geometry: { type: 'LineString', coordinates: trackPoints.map(pt => [pt.lon, pt.lat]) },
+                    properties: {}
+                };
+
+                map.addSource('gpx-track', { type: 'geojson', data: gpxGeoJSON });
+                map.addLayer({ id: 'gpx-line', type: 'line', source: 'gpx-track', paint: { 'line-color': '#00ffff', 'line-width': 4 } });
+
+                const bounds = new maplibregl.LngLatBounds();
+                trackPoints.forEach(pt => bounds.extend([pt.lon, pt.lat]));
+                map.fitBounds(bounds, { padding: 50 });
+
+                animMarker = new maplibregl.Marker({ color: '#ff6600' }).setLngLat([trackPoints[0].lon, trackPoints[0].lat]).addTo(map);
+
+                const sidebar = document.getElementById('sidebar');
+                photoData.forEach(photo => {
+                    if (photo.lat === null || photo.lon === null) return;
+                    const descHtml = photo.description ? `<p style="margin:5px 0;font-size:12px;">${photo.description}</p>` : '';
+                    const popup = new maplibregl.Popup({ offset: 25 }).setHTML(`<img src="${photo.url}" style="max-width:300px;" />${descHtml}`);
+                    const el = document.createElement('div');
+                    el.style.backgroundImage = `url(${photo.url})`;
+                    el.style.width = '30px'; el.style.height = '30px'; el.style.backgroundSize = 'cover';
+                    el.style.borderRadius = '50%'; el.style.border = '2px solid #ff0000'; el.style.cursor = 'pointer';
+                    const marker = new maplibregl.Marker(el).setLngLat([photo.lon, photo.lat]).setPopup(popup).addTo(map);
+
+                    const photoItem = document.createElement('div');
+                    photoItem.className = 'photo-item';
+                    photoItem.innerHTML = `<img src="${photo.url}" alt="${photo.file.name}" />`;
+                    photoItem.addEventListener('click', () => { map.flyTo({ center: [photo.lon, photo.lat], zoom: 15 }); marker.togglePopup(); });
+                    sidebar.appendChild(photoItem);
+                });
+
+                document.getElementById('playBtn').addEventListener('click', () => {
+                    if (isPlaying) return;
+                    isPlaying = true;
+                    document.getElementById('playBtn').classList.add('active');
+                    animInterval = setInterval(() => { animIndex++; if (animIndex >= trackPoints.length) animIndex = 0; updateMarker(animIndex); }, 100);
+                });
+
+                document.getElementById('pauseBtn').addEventListener('click', () => { isPlaying = false; document.getElementById('playBtn').classList.remove('active'); clearInterval(animInterval); });
+                document.getElementById('trackSlider').addEventListener('input', (e) => { const idx = Math.floor((e.target.value / 100) * (trackPoints.length - 1)); animIndex = idx; updateMarker(idx); });
+            });
+        }
+    </script>
+</body>
+</html>
