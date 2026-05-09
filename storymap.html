@@ -7,6 +7,7 @@
     <script src='https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js'></script>
     <link href='https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css' rel='stylesheet' />
     <script src='https://cdn.jsdelivr.net/npm/exif-js@2.3.0/exif.js'></script>
+    <script src='config.js'></script>
     <style>
         body { margin: 0; padding: 0; font-family: sans-serif; }
         #map { position: absolute; top: 0; bottom: 0; width: 100%; }
@@ -55,8 +56,6 @@
         </div>
     </div>
     <script>
-        const MAPTILER_KEY = 'rMZU9gPUpqLw4iOuK2P8';
-
         let gpxFile = null;
         let photoFiles = [];
         let photoData = []; // { file, url, lat, lon, description }
